@@ -570,9 +570,11 @@ class OfficerView(discord.ui.View):
         style=discord.ButtonStyle.green,
         custom_id="backup_queue"
     )
-    async def backup_queue(self, interaction, button):
+    async def backup_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        # TODO: implement backup logic
+        # voorbeeld backup (moet jij aanpassen naar jouw system)
+        await create_backup()
+
         await interaction.response.send_message(
             "Backup created.",
             ephemeral=True
@@ -584,7 +586,7 @@ class OfficerView(discord.ui.View):
         style=discord.ButtonStyle.blurple,
         custom_id="restore_backup"
     )
-    async def restore_backup(self, interaction, button):
+    async def restore_backup(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         if not has_admin_access(interaction.user):
             return await interaction.response.send_message(
@@ -592,9 +594,31 @@ class OfficerView(discord.ui.View):
                 ephemeral=True
             )
 
-        files = sorted(
-            os.listdir(BACKUP_FOLDER),
-            reverse=True
+        files = sorted(os.listdir(BACKUP_FOLDER), reverse=True)
+
+        if not files:
+            return await interaction.response.send_message(
+                "No backups found.",
+                ephemeral=True
+            )
+
+        latest = files[0]
+
+        await create_backup()
+
+        shutil.copy2(
+            os.path.join(BACKUP_FOLDER, latest),
+            DB
+        )
+
+        await log_action(
+            interaction.user,
+            f"restored backup `{latest}`"
+        )
+
+        await interaction.response.send_message(
+            f"Restored {latest}",
+            ephemeral=True
         )
 
         if not files:
