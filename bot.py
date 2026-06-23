@@ -201,6 +201,19 @@ async def get_user(user_id):
 
         return await cursor.fetchone()
 
+def has_admin_access(member):
+
+    if member.id in TRUSTED_USERS:
+        return True
+
+    return any(
+        role.name in [
+            "Officer",
+            "Guild Master"
+        ]
+        for role in member.roles
+    )
+
 
 async def compress_queue():
 
@@ -969,19 +982,6 @@ class ActionSelect(discord.ui.Select):
             action,
             view.selected_members
         )
-
-def has_admin_access(member):
-
-    if member.id in TRUSTED_USERS:
-        return True
-
-    return any(
-        role.name in [
-            "Officer",
-            "Guild Master"
-        ]
-        for role in member.roles
-    )
 
 class OfficerPanelView(discord.ui.View):
 
