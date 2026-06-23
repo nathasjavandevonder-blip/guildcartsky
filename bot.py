@@ -929,55 +929,29 @@ async def update_utc_channel():
 @bot.event
 async def on_ready():
 
-    print(
-        "=" * 50
-    )
-
-    print(
-        f"Logged in as {bot.user}"
-    )
-
-    print(
-        "=" * 50
-    )
+    print("=" * 50)
+    print(f"Logged in as {bot.user}")
+    print("=" * 50)
 
     # persistent buttons
-
     try:
+        bot.add_view(CartView())
+        bot.add_view(OfficerView())
 
-        bot.add_view(
-            CartView()
-        )
-        
-        bot.add_view(
-    OfficerView()
-)
+        print("Persistent views loaded.")
 
-
-        print(
-            "Persistent CartView loaded."
-        )
-
-    except:
-
+    except Exception:
         traceback.print_exc()
 
     # sync commands
-
     try:
-
         synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} commands.")
 
-        print(
-            f"Synced {len(synced)} commands."
-        )
-
-    except:
-
+    except Exception:
         traceback.print_exc()
 
-    # start reminders
-
+    # start background tasks
     if not reminder_task.is_running():
         reminder_task.start()
 
@@ -985,85 +959,54 @@ async def on_ready():
         update_utc_channel.start()
 
     # send panel
-
     try:
+        channel = bot.get_channel(CHANNEL_ID)
 
-        channel = bot.get_channel(
-            CHANNEL_ID
-        )
+        if not channel:
+            return
 
-        if channel:
-
-            embed = discord.Embed(
-
-                title="🚚 SKY Guild Cart Queue (UTC)",
-
-                description=
-
+        embed = discord.Embed(
+            title="🚚 SKY Guild Cart Queue (UTC)",
+            description=
                 "➕ Join Queue\n"
                 "✏️ Edit Hour\n"
                 "⏩ Postpone Hour\n"
                 "📋 View Queue\n"
                 "❌ Leave Queue",
+            colour=discord.Colour.gold()
+        )
 
-                colour=discord.Colour.gold()
+        await channel.send(
+            embed=embed,
+            view=CartView()
+        )
 
-            )
+        officer_embed = discord.Embed(
+            title="🛡 Officer Panel",
+            description=
+                "💾 Backup Queue\n"
+                "♻ Restore Backup",
+            colour=discord.Colour.red()
+        )
 
-            await channel.send(
+        await channel.send(
+            embed=officer_embed,
+            view=OfficerView()
+        )
 
-                embed=embed,
-                view=CartView()
+    except Exception:
+        traceback.print_exc()
 
-            )
-            
-            officer_embed = discord.Embed(
-    title="🛡 Officer Panel",
-    description=
-        "💾 Backup Queue\n"
-        "♻ Restore Backup",
-    colour=discord.Colour.red()
-)
 
-try:
-
-    await channel.send(
-        embed=embed,
-        view=CartView()
-    )
-
-    officer_embed = discord.Embed(
-        title="🛡 Officer Panel",
-        description=
-            "💾 Backup Queue\n"
-            "♻ Restore Backup",
-        colour=discord.Colour.red()
-    )
-
-    await channel.send(
-        embed=officer_embed,
-        view=OfficerView()
-    )
-
-except Exception:
-    traceback.print_exc()
-    
 # ================= ERRORS =================
 
 @bot.event
-async def on_error(
-        event,
-        *args,
-        **kwargs):
-
+async def on_error(event, *args, **kwargs):
     traceback.print_exc()
 
 
 @bot.tree.error
-async def on_app_command_error(
-        interaction,
-        error):
-
+async def on_app_command_error(interaction, error):
     traceback.print_exception(
         type(error),
         error,
@@ -1072,7 +1015,6 @@ async def on_app_command_error(
 
 
 # ================= START =================
-
 async def main():
 
     await init_db()
