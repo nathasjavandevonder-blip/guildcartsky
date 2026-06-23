@@ -76,9 +76,18 @@ async def init_db():
             user_id INTEGER PRIMARY KEY,
             position INTEGER,
             hour TEXT,
-            reminded INTEGER DEFAULT 0
+            reminded INTEGER DEFAULT 0,
+            manual_name TEXT
         )
         """)
+
+        try:
+            await db.execute(
+                "ALTER TABLE carts ADD COLUMN manual_name TEXT"
+            )
+        except Exception:
+            # Column already exists on upgraded databases
+            pass
 
         await db.commit()
 
@@ -86,6 +95,7 @@ async def init_db():
 # ================= GLOBAL STATE ===============
 
 queue_message = None
+officer_message = None
 
 
 # ================= QUEUE =================
@@ -105,7 +115,30 @@ async def get_queue():
         return await cursor.fetchall()
 
 
-async def get_all_members():
+async def get_all_members(guild=None):
+
+    result = []
+    seen_ids = set()
+
+    if guild:
+
+        guild_members = sorted(
+            [
+                member
+                for member in guild.members
+                if not member.bot
+            ],
+            key=lambda member: member.display_name.lower()
+        )
+
+        for member in guild_members:
+
+            result.append({
+                "id": member.id,
+                "name": f"👤 {member.display_name}"
+            })
+
+            seen_ids.add(member.id)
 
     async with aiosqlite.connect(DB) as db:
 
@@ -119,8 +152,6 @@ async def get_all_members():
 
         rows = await cursor.fetchall()
 
-    result = []
-
     for uid, manual_name in rows:
 
         if manual_name:
@@ -130,7 +161,7 @@ async def get_all_members():
                 "name": f"📝 {manual_name}"
             })
 
-        else:
+        elif uid not in seen_ids:
 
             user = bot.get_user(uid)
 
@@ -140,6 +171,17 @@ async def get_all_members():
                     "id": uid,
                     "name": f"👤 {user.display_name}"
                 })
+
+                seen_ids.add(uid)
+
+            else:
+
+                result.append({
+                    "id": uid,
+                    "name": f"👤 <@{uid}>"
+                })
+
+                seen_ids.add(uid)
 
     return result
 
@@ -206,10 +248,7 @@ async def get_queue_position(user_id: int):
 
     rows = await get_queue()
 
-    for _, position, hour in rows:
-        pass
-
-    for uid, position, hour in rows:
+    for uid, position, hour, manual_name in rows:
         if uid == user_id:
             return position
 
@@ -229,7 +268,7 @@ def paginate(items, page: int):
 
 async def refresh_queue():
 
-    global queue_message
+    global queue_message, officer_message
 
     if not queue_message:
         return
@@ -730,10 +769,17 @@ class MemberSelect(discord.ui.Select):
 
         options = []
 
-        for m in page_members:
+        for member_data in page_members:
 
-            label = getattr(m, "display_name", None) or str(m)
-            value = str(getattr(m, "id", m))
+            if isinstance(member_data, dict):
+
+                label = member_data.get("name", "Unknown")
+                value = str(member_data.get("id"))
+
+            else:
+
+                label = getattr(member_data, "display_name", None) or str(member_data)
+                value = str(getattr(member_data, "id", member_data))
 
             options.append(
                 discord.SelectOption(
@@ -768,15 +814,30 @@ class MemberSelect(discord.ui.Select):
 
         self.view.selected_members = [int(value) for value in self.values]
 
-        mentions = " ".join(
-            f"<@{value}>"
-            for value in self.values
-        )
+        name_lookup = {}
+
+        for member_data in self.view.members:
+
+            if isinstance(member_data, dict):
+                name_lookup[int(member_data["id"])] = member_data["name"]
+
+            else:
+                name_lookup[int(member_data.id)] = member_data.display_name
+
+        selected_names = []
+
+        for value in self.values:
+
+            selected_id = int(value)
+            selected_names.append(
+                name_lookup.get(selected_id, f"<@{selected_id}>")
+            )
 
         await interaction.response.send_message(
-            f"Selected: {mentions}",
+            "Selected: " + ", ".join(selected_names),
             ephemeral=True
         )
+
 
 class ManualAddModal(discord.ui.Modal, title="Add Name Manually"):
 
@@ -831,6 +892,7 @@ class ManualAddModal(discord.ui.Modal, title="Add Name Manually"):
 
         await compress_queue()
         await refresh_queue()
+        await refresh_officer_panel(interaction.guild)
 
         await log_action(
             interaction.user,
@@ -959,6 +1021,7 @@ class OfficerPanelView(discord.ui.View):
 
             await compress_queue()
             await refresh_queue()
+            await refresh_officer_panel(interaction.guild)
 
             await log_action(
                 interaction.user,
@@ -994,6 +1057,7 @@ class OfficerPanelView(discord.ui.View):
 
             await compress_queue()
             await refresh_queue()
+            await refresh_officer_panel(interaction.guild)
 
             await log_action(
                 interaction.user,
@@ -1014,6 +1078,7 @@ class OfficerPanelView(discord.ui.View):
                     moved += 1
 
             await refresh_queue()
+            await refresh_officer_panel(interaction.guild)
 
             await log_action(
                 interaction.user,
@@ -1034,6 +1099,7 @@ class OfficerPanelView(discord.ui.View):
                     moved += 1
 
             await refresh_queue()
+            await refresh_officer_panel(interaction.guild)
 
             await log_action(
                 interaction.user,
@@ -1091,6 +1157,34 @@ class NextButton(discord.ui.Button):
         self.panel.refresh_ui()
 
         await interaction.response.edit_message(view=self.panel)
+
+
+async def refresh_officer_panel(guild):
+
+    global officer_message
+
+    if not officer_message or not guild:
+        return
+
+    try:
+
+        members = await get_all_members(guild)
+
+        officer_embed = discord.Embed(
+            title="⚜️ Officer Panel",
+            description=
+                "Select one or more members.\n"
+                "Then choose Add, Remove, Move Up, or Move Down.",
+            colour=discord.Colour.red()
+        )
+
+        await officer_message.edit(
+            embed=officer_embed,
+            view=OfficerPanelView(members)
+        )
+
+    except Exception:
+        traceback.print_exc()
 
 
 # ================= COMMAND GROUP =================
@@ -1252,8 +1346,6 @@ async def reminder_task():
             "%H:%M"
         )
 
-        rows = await get_queue()
-
         channel = bot.get_channel(
             CHANNEL_ID
         )
@@ -1273,14 +1365,15 @@ async def reminder_task():
                 SELECT user_id,
                        position,
                        hour,
-                       reminded
+                       reminded,
+                       manual_name
                 FROM carts
                 """
             )
 
             users = await cursor.fetchall()
 
-            for uid, pos, hour, reminded in users:
+            for uid, pos, hour, reminded, manual_name in users:
 
                 hour_dt = datetime.strptime(
                     hour,
@@ -1314,11 +1407,17 @@ async def reminder_task():
 
                     try:
 
-                        user = await bot.fetch_user(
-                            uid
-                        )
+                        if manual_name:
 
-                        owner = user.mention
+                            owner = manual_name
+
+                        else:
+
+                            user = await bot.fetch_user(
+                                uid
+                            )
+
+                            owner = user.mention
 
                         date = date_for_position(
                             pos
@@ -1401,7 +1500,7 @@ async def update_utc_channel():
 @bot.event
 async def on_ready():
 
-    global queue_message
+    global queue_message, officer_message
 
     print("=" * 50)
     print(f"Logged in as {bot.user}")
@@ -1463,14 +1562,7 @@ async def on_ready():
 
         # ================= OFFICER PANEL =================
 
-        user_list = sorted(
-            [
-                member
-                for member in channel.guild.members
-                if not member.bot
-            ],
-            key=lambda member: member.display_name.lower()
-        )
+        members = await get_all_members(channel.guild)
 
         officer_embed = discord.Embed(
             title="⚜️ Officer Panel",
@@ -1480,9 +1572,9 @@ async def on_ready():
             colour=discord.Colour.red()
         )
 
-        await channel.send(
+        officer_message = await channel.send(
             embed=officer_embed,
-            view=OfficerPanelView(user_list)
+            view=OfficerPanelView(members)
         )
 
     except Exception:
