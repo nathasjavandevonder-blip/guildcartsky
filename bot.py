@@ -96,13 +96,52 @@ async def get_queue():
 
         cursor = await db.execute(
             """
-            SELECT user_id,position,hour
+            SELECT user_id, position, hour, manual_name
             FROM carts
             ORDER BY position
             """
         )
 
         return await cursor.fetchall()
+
+
+async def get_all_members():
+
+    async with aiosqlite.connect(DB) as db:
+
+        cursor = await db.execute(
+            """
+            SELECT user_id, manual_name
+            FROM carts
+            ORDER BY position
+            """
+        )
+
+        rows = await cursor.fetchall()
+
+    result = []
+
+    for uid, manual_name in rows:
+
+        if manual_name:
+
+            result.append({
+                "id": uid,
+                "name": f"📝 {manual_name}"
+            })
+
+        else:
+
+            user = bot.get_user(uid)
+
+            if user:
+
+                result.append({
+                    "id": uid,
+                    "name": f"👤 {user.display_name}"
+                })
+
+    return result
 
 
 async def get_user(user_id):
@@ -119,87 +158,6 @@ async def get_user(user_id):
         )
 
         return await cursor.fetchone()
-
-
-async def compress_queue():
-
-    rows = await get_queue()
-
-    async with aiosqlite.connect(DB) as db:
-
-        for index, row in enumerate(rows, start=1):
-
-            uid = row[0]
-
-            await db.execute(
-                """
-                UPDATE carts
-                SET position=?
-                WHERE user_id=?
-                """,
-                (index, uid)
-            )
-
-        await db.commit()
-
-
-def create_backup_folder():
-    os.makedirs(BACKUP_FOLDER, exist_ok=True)
-
-
-async def create_backup():
-
-    create_backup_folder()
-
-    timestamp = datetime.now().strftime(
-        "%Y%m%d_%H%M%S"
-    )
-
-    backup_file = (
-        f"{BACKUP_FOLDER}/cart_{timestamp}.db"
-    )
-
-    shutil.copy2(DB, backup_file)
-
-    return backup_file
-
-
-def is_officer(member):
-
-    return any(
-        role.name in [
-            "Officer",
-            "Guild Master"
-        ]
-        for role in member.roles
-    )
-
-
-def has_admin_access(member):
-
-    if member.id in TRUSTED_USERS:
-        return True
-
-    return any(
-        role.name == "Guild Master"
-        for role in member.roles
-    )
-
-
-async def log_action(user, action):
-
-    channel = bot.get_channel(
-        1515304317723213956
-    )
-
-    if channel:
-
-        await channel.send(
-            f"**GuildCart**\n"
-            f"{user.mention} {action}"
-        )
-
-
 # ================= MOVE LOGIC =================
 
 async def move_member(user_id: int, direction: str):
