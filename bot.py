@@ -1025,16 +1025,29 @@ async def on_ready():
     colour=discord.Colour.red()
 )
 
-await channel.send(
-    embed=officer_embed,
-    view=OfficerView()
-)
+try:
 
-    except:
+    await channel.send(
+        embed=embed,
+        view=CartView()
+    )
 
-        traceback.print_exc()
+    officer_embed = discord.Embed(
+        title="🛡 Officer Panel",
+        description=
+            "💾 Backup Queue\n"
+            "♻ Restore Backup",
+        colour=discord.Colour.red()
+    )
 
+    await channel.send(
+        embed=officer_embed,
+        view=OfficerView()
+    )
 
+except Exception:
+    traceback.print_exc()
+    
 # ================= ERRORS =================
 
 @bot.event
