@@ -38,6 +38,7 @@ TRUSTED_USERS = [
 LOG_CHANNEL_ID = 1515304317723213956
 
 BACKUP_FOLDER = "backups"
+PANEL_STATE_FILE = "panel_state.json"
 
 # ==========================================
 
@@ -99,6 +100,7 @@ async def init_db():
 # ================= GLOBAL STATE ===============
 
 queue_message = None
+backup_message = None
 officer_message = None
 
 
@@ -363,7 +365,7 @@ def paginate(items, page: int):
 
 async def refresh_queue():
 
-    global queue_message, officer_message
+    global queue_message, backup_message, officer_message
 
     if not queue_message:
         return
@@ -1555,7 +1557,82 @@ async def reminder_task():
 
         traceback.print_exc()
 
-@tasks.loop(minutes=15)
+
+# ================= PANEL STATE =================
+
+def load_panel_state():
+
+    try:
+
+        if not os.path.exists(PANEL_STATE_FILE):
+            return {}
+
+        with open(PANEL_STATE_FILE, "r", encoding="utf-8") as file:
+            return json.load(file)
+
+    except Exception:
+        traceback.print_exc()
+        return {}
+
+
+def save_panel_state(state):
+
+    try:
+
+        with open(PANEL_STATE_FILE, "w", encoding="utf-8") as file:
+            json.dump(state, file, indent=4)
+
+    except Exception:
+        traceback.print_exc()
+
+
+async def get_saved_message(channel, message_id):
+
+    if not message_id:
+        return None
+
+    try:
+        return await channel.fetch_message(int(message_id))
+
+    except discord.NotFound:
+        return None
+
+    except discord.Forbidden:
+        return None
+
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
+async def upsert_panel_message(channel, state, key, embed, view):
+
+    message = await get_saved_message(
+        channel,
+        state.get(key)
+    )
+
+    if message:
+
+        await message.edit(
+            embed=embed,
+            view=view
+        )
+
+        return message
+
+    message = await channel.send(
+        embed=embed,
+        view=view
+    )
+
+    state[key] = message.id
+    save_panel_state(state)
+
+    return message
+
+
+@tasks.loop(minutes=1)
 async def update_utc_channel():
 
     try:
@@ -1567,11 +1644,11 @@ async def update_utc_channel():
         if channel is None:
             return
 
-        utc_time = datetime.now(
-            timezone.utc
-        ).strftime(
-            "%H:%M"
-        )
+        now = datetime.now(timezone.utc)
+
+        minute = (now.minute // 15) * 15
+
+        utc_time = f"{now.hour:02d}:{minute:02d}"
 
         new_name = f"🕒 UTC {utc_time}"
 
@@ -1632,11 +1709,16 @@ async def on_ready():
         if not channel:
             return
 
+        state = load_panel_state()
+
         # ================= CART PANEL =================
 
-        queue_message = await channel.send(
-            embed=await build_queue_embed(),
-            view=CartView()
+        queue_message = await upsert_panel_message(
+            channel,
+            state,
+            "queue_message_id",
+            await build_queue_embed(),
+            CartView()
         )
 
         # ================= BACKUP PANEL =================
@@ -1649,9 +1731,12 @@ async def on_ready():
             colour=discord.Colour.blurple()
         )
 
-        await channel.send(
-            embed=backup_embed,
-            view=OfficerView()
+        backup_message = await upsert_panel_message(
+            channel,
+            state,
+            "backup_message_id",
+            backup_embed,
+            OfficerView()
         )
 
         # ================= OFFICER PANEL =================
@@ -1666,9 +1751,12 @@ async def on_ready():
             colour=discord.Colour.red()
         )
 
-        officer_message = await channel.send(
-            embed=officer_embed,
-            view=OfficerPanelView(members)
+        officer_message = await upsert_panel_message(
+            channel,
+            state,
+            "officer_message_id",
+            officer_embed,
+            OfficerPanelView(members)
         )
 
     except Exception:
