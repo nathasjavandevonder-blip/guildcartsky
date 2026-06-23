@@ -576,10 +576,10 @@ class OfficerView(discord.ui.View):
         button
     ):
     @discord.ui.button(
-    label="Restore Backup",
-    emoji="♻️",
-    style=discord.ButtonStyle.blurple,
-    custom_id="restore_backup"
+        label="Restore Backup",
+        emoji="♻️",
+        style=discord.ButtonStyle.blurple,
+        custom_id="restore_backup"
 )
 async def restore_backup(
     self,
