@@ -578,6 +578,14 @@ class OfficerView(discord.ui.View):
         style=discord.ButtonStyle.blurple,
         custom_id="restore_backup"
     )
+async def backup_queue(self, interaction, button):
+
+    @discord.ui.button(
+        label="Restore Backup",
+        emoji="♻️",
+        style=discord.ButtonStyle.blurple,
+        custom_id="restore_backup"
+    )
     async def restore_backup(self, interaction, button):
 
         if not has_admin_access(interaction.user):
@@ -585,11 +593,6 @@ class OfficerView(discord.ui.View):
                 "No permission.",
                 ephemeral=True
             )
-
-        files = sorted(
-            os.listdir(BACKUP_FOLDER),
-            reverse=True
-        )
 
         files = sorted(
             os.listdir(BACKUP_FOLDER),
