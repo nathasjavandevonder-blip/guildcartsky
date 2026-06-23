@@ -804,6 +804,56 @@ class MemberSelect(discord.ui.Select):
             ephemeral=True
         )
 
+class ManualAddModal(discord.ui.Modal, title="Add Name Manually"):
+
+    name = discord.ui.TextInput(
+        label="Name",
+        placeholder="Type the name here",
+        required=True,
+        max_length=50
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        rows = await get_queue()
+        position = len(rows) + 1
+
+        # negatieve ID zodat het nooit botst met echte Discord user IDs
+        manual_id = -int(datetime.now().timestamp())
+
+        async with aiosqlite.connect(DB) as db:
+            await db.execute(
+                """
+                INSERT INTO carts(
+                    user_id,
+                    position,
+                    hour,
+                    manual_name
+                )
+                VALUES(?,?,?,?)
+                """,
+                (
+                    manual_id,
+                    position,
+                    "00:00",
+                    str(self.name)
+                )
+            )
+
+            await db.commit()
+
+        await compress_queue()
+        await refresh_queue()
+
+        await log_action(
+            interaction.user,
+            f"added manual name `{self.name}` to the queue"
+        )
+
+        await interaction.response.send_message(
+            f"Added manual name: {self.name}",
+            ephemeral=True
+        )
 
 class ActionSelect(discord.ui.Select):
 
