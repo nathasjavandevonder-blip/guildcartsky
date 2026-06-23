@@ -574,7 +574,7 @@ class OfficerView(discord.ui.View):
         self,
         interaction,
         button
-    )
+    ):
     @discord.ui.button(
     label="Restore Backup",
     emoji="♻️",
