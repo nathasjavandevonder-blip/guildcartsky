@@ -227,6 +227,51 @@ def is_officer(member):
         or OFFICER_ROLE_ID in role_ids
     )
 
+# ================= BACKUP HELPERS =================
+
+def create_backup_folder():
+
+    os.makedirs(BACKUP_FOLDER, exist_ok=True)
+
+
+async def create_backup():
+
+    create_backup_folder()
+
+    timestamp = datetime.now().strftime(
+        "%Y%m%d_%H%M%S"
+    )
+
+    backup_file = os.path.join(
+        BACKUP_FOLDER,
+        f"cart_{timestamp}.db"
+    )
+
+    shutil.copy2(DB, backup_file)
+
+    return backup_file
+
+
+# ================= MOD LOGGING =================
+
+async def log_action(user, action):
+
+    channel = bot.get_channel(LOG_CHANNEL_ID)
+
+    if not channel:
+        return
+
+    try:
+
+        await channel.send(
+            f"⚜️ **GuildCart Log**\n"
+            f"👤 {user.mention}\n"
+            f"📌 {action}"
+        )
+
+    except Exception:
+        traceback.print_exc()
+
 
 async def compress_queue():
 
