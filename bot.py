@@ -8,6 +8,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 import os
 from dotenv import load_dotenv
+import json
+import shutil
 
 # ================= CONFIG =================
 
@@ -22,6 +24,16 @@ CHANNEL_ID = 1517597432714887380
 GUILD_CART_ROLE_ID = 1515472832748982444
 UTC_CHANNEL_ID = 1518244845918097540
 DB = "cart.db"
+OFFICER_ROLE_NAME = "Officer"
+GUILDMASTER_ROLE_NAME = "Guild Master"
+
+TRUSTED_USERS = [
+    176308213489205249
+]
+
+LOG_CHANNEL_ID = 1515304317723213956
+
+BACKUP_FOLDER = "backups"
 
 # ==========================================
 
@@ -110,10 +122,7 @@ async def compress_queue():
 
     async with aiosqlite.connect(DB) as db:
 
-        for index, row in enumerate(
-                rows,
-                start=1
-        ):
+        for index, row in enumerate(rows, start=1):
 
             uid = row[0]
 
@@ -123,14 +132,65 @@ async def compress_queue():
                 SET position=?
                 WHERE user_id=?
                 """,
-                (
-                    index,
-                    uid
-                )
+                (index, uid)
             )
 
         await db.commit()
 
+
+def create_backup_folder():
+    os.makedirs(BACKUP_FOLDER, exist_ok=True)
+
+
+async def create_backup():
+
+    create_backup_folder()
+
+    timestamp = datetime.now().strftime(
+        "%Y%m%d_%H%M%S"
+    )
+
+    backup_file = (
+        f"{BACKUP_FOLDER}/cart_{timestamp}.db"
+    )
+
+    shutil.copy2(DB, backup_file)
+
+    return backup_file
+
+def is_officer(member):
+
+    return any(
+        role.name in [
+            Officer,
+            Guild Master
+        ]
+        for role in member.roles
+    )
+
+
+def has_admin_access(member):
+
+    if member.id in TRUSTED_USERS:
+        return True
+
+    return any(
+        role.name == Guild Master
+        for role in member.roles
+    )
+
+async def log_action(user, action):
+
+    channel = bot.get_channel(
+        1515304317723213956
+    )
+
+    if channel:
+
+        await channel.send(
+            f"**GuildCart**\n"
+            f"{user.mention} {action}"
+        )
 
 # ================= EMBED =================
 
@@ -499,6 +559,77 @@ class CartView(discord.ui.View):
             ephemeral=True
         )
 
+class OfficerView(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Backup Queue",
+        emoji="💾",
+        style=discord.ButtonStyle.green,
+        custom_id="backup_queue"
+    )
+    async def backup_queue(
+        self,
+        interaction,
+        button
+    )
+    @discord.ui.button(
+    label="Restore Backup",
+    emoji="♻️",
+    style=discord.ButtonStyle.blurple,
+    custom_id="restore_backup"
+)
+async def restore_backup(
+    self,
+    interaction,
+    button
+):
+
+    if not has_admin_access(
+        interaction.user
+    ):
+
+        return await interaction.response.send_message(
+            "No permission.",
+            ephemeral=True
+        )
+
+    files = sorted(
+        os.listdir(BACKUP_FOLDER),
+        reverse=True
+    )
+
+    if not files:
+
+        return await interaction.response.send_message(
+            "No backups found.",
+            ephemeral=True
+        )
+
+    latest = files[0]
+
+    await create_backup()
+
+    shutil.copy2(
+        os.path.join(
+            BACKUP_FOLDER,
+            latest
+        ),
+        DB
+    )
+
+    await log_action(
+        interaction.user,
+        f"restored backup `{latest}`"
+    )
+
+    await interaction.response.send_message(
+        f"Restored {latest}",
+        ephemeral=True
+    )
+        
 
 # ================= COMMAND GROUP =================
 
@@ -826,6 +957,11 @@ async def on_ready():
         bot.add_view(
             CartView()
         )
+        
+        bot.add_view(
+    OfficerView()
+)
+
 
         print(
             "Persistent CartView loaded."
@@ -889,6 +1025,19 @@ async def on_ready():
                 view=CartView()
 
             )
+            
+            officer_embed = discord.Embed(
+    title="🛡 Officer Panel",
+    description=
+        "💾 Backup Queue\n"
+        "♻ Restore Backup",
+    colour=discord.Colour.red()
+)
+
+await channel.send(
+    embed=officer_embed,
+    view=OfficerView()
+)
 
     except:
 
@@ -936,4 +1085,4 @@ if __name__ == "__main__":
     asyncio.run(
         main()
     )
-bot.run(TOKEN)
+
