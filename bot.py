@@ -570,37 +570,26 @@ class OfficerView(discord.ui.View):
         style=discord.ButtonStyle.green,
         custom_id="backup_queue"
     )
-    async def backup_queue(
-        self,
-        interaction,
-        button
-    ):
-        
+async def backup_queue(self, interaction, button):
+
     @discord.ui.button(
         label="Restore Backup",
         emoji="♻️",
         style=discord.ButtonStyle.blurple,
         custom_id="restore_backup"
-)
-async def restore_backup(
-    self,
-    interaction,
-    button
-):
-
-    if not has_admin_access(
-        interaction.user
-    ):
-
-        return await interaction.response.send_message(
-            "No permission.",
-            ephemeral=True
-        )
-
-    files = sorted(
-        os.listdir(BACKUP_FOLDER),
-        reverse=True
     )
+    async def restore_backup(self, interaction, button):
+
+        if not has_admin_access(interaction.user):
+            return await interaction.response.send_message(
+                "No permission.",
+                ephemeral=True
+            )
+
+        files = sorted(
+            os.listdir(BACKUP_FOLDER),
+            reverse=True
+        )
 
     if not files:
 
