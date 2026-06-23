@@ -810,10 +810,11 @@ class ActionSelect(discord.ui.Select):
     def __init__(self):
 
         options = [
-            discord.SelectOption(label="Add Member", value="add", emoji="➕"),
-            discord.SelectOption(label="Remove Member", value="remove", emoji="➖"),
-            discord.SelectOption(label="Move Up", value="up", emoji="⬆️"),
-            discord.SelectOption(label="Move Down", value="down", emoji="⬇️"),
+            discord.SelectOption(label="Add Member", value="add"),
+            discord.SelectOption(label="Add Name Manually", value="add_manual"),
+            discord.SelectOption(label="Remove Member", value="remove"),
+            discord.SelectOption(label="Move Up", value="up"),
+            discord.SelectOption(label="Move Down", value="down"),
         ]
 
         super().__init__(
@@ -825,6 +826,14 @@ class ActionSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
 
         view = self.view
+        action = self.values[0]
+
+        if action == "add_manual":
+            return await view.handle_action(
+                interaction,
+                action,
+                []
+            )
 
         if not view.selected_members:
             return await interaction.response.send_message(
@@ -834,7 +843,7 @@ class ActionSelect(discord.ui.Select):
 
         await view.handle_action(
             interaction,
-            self.values[0],
+            action,
             view.selected_members
         )
 
@@ -866,6 +875,12 @@ class OfficerPanelView(discord.ui.View):
             return await interaction.response.send_message(
                 "No permission.",
                 ephemeral=True
+            )
+            
+        if action == "add_manual":
+
+            return await interaction.response.send_modal(
+                ManualAddModal()
             )
 
         if action == "add":
