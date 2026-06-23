@@ -27,6 +27,10 @@ DB = "cart.db"
 OFFICER_ROLE_NAME = "Officer"
 GUILDMASTER_ROLE_NAME = "Guild Master"
 
+GUILDMASTER_ROLE_ID = 1515304697353994310
+OFFICER_ROLE_ID = 1515305248653180949
+MEMBER_ROLE_ID = 1515305910359298139
+
 TRUSTED_USERS = [
     176308213489205249
 ]
@@ -206,12 +210,21 @@ def has_admin_access(member):
     if member.id in TRUSTED_USERS:
         return True
 
-    return any(
-        role.name in [
-            "Officer",
-            "Guild Master"
-        ]
-        for role in member.roles
+    role_ids = [role.id for role in member.roles]
+
+    return (
+        GUILDMASTER_ROLE_ID in role_ids
+        or OFFICER_ROLE_ID in role_ids
+    )
+
+
+def is_officer(member):
+
+    role_ids = [role.id for role in member.roles]
+
+    return (
+        GUILDMASTER_ROLE_ID in role_ids
+        or OFFICER_ROLE_ID in role_ids
     )
 
 
