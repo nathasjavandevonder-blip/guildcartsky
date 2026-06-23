@@ -175,7 +175,7 @@ def has_admin_access(member):
         return True
 
     return any(
-        role.name == Guild Master
+        role.name == "Guild Master"
         for role in member.roles
     )
 
