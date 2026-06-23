@@ -290,7 +290,17 @@ async def refresh_queue():
 
 async def build_queue_embed():
 
-    rows = await get_queue()
+    async with aiosqlite.connect(DB) as db:
+
+        cursor = await db.execute(
+            """
+            SELECT user_id, position, hour, manual_name
+            FROM carts
+            ORDER BY position
+            """
+        )
+
+        rows = await cursor.fetchall()
 
     embed = discord.Embed(
         title="🚚 SKY Guild Cart Queue (UTC)",
@@ -305,17 +315,23 @@ async def build_queue_embed():
 
     text = ""
 
-    for uid, pos, hour in rows:
+    for uid, pos, hour, manual_name in rows:
 
-        try:
+        if manual_name:
 
-            user = await bot.fetch_user(uid)
+            mention = f"**{manual_name}**"
 
-            mention = user.mention
+        else:
 
-        except:
+            try:
 
-            mention = f"<@{uid}>"
+                user = await bot.fetch_user(uid)
+
+                mention = user.mention
+
+            except:
+
+                mention = f"<@{uid}>"
 
         cart_date = date_for_position(pos)
 
