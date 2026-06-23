@@ -200,6 +200,30 @@ async def get_user(user_id):
         )
 
         return await cursor.fetchone()
+
+
+async def compress_queue():
+
+    rows = await get_queue()
+
+    async with aiosqlite.connect(DB) as db:
+
+        for index, row in enumerate(rows, start=1):
+
+            uid = row[0]
+
+            await db.execute(
+                """
+                UPDATE carts
+                SET position=?
+                WHERE user_id=?
+                """,
+                (index, uid)
+            )
+
+        await db.commit()
+
+
 # ================= MOVE LOGIC =================
 
 async def move_member(user_id: int, direction: str):
