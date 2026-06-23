@@ -591,6 +591,11 @@ class OfficerView(discord.ui.View):
             reverse=True
         )
 
+        files = sorted(
+            os.listdir(BACKUP_FOLDER),
+            reverse=True
+        )
+
     if not files:
 
         return await interaction.response.send_message(
