@@ -162,8 +162,8 @@ def is_officer(member):
 
     return any(
         role.name in [
-            Officer,
-            Guild Master
+            "Officer",
+            "Guild Master"
         ]
         for role in member.roles
     )
