@@ -572,13 +572,11 @@ class OfficerView(discord.ui.View):
     )
     async def backup_queue(self, interaction, button):
 
-    @discord.ui.button(
-        label="Restore Backup",
-        emoji="♻️",
-        style=discord.ButtonStyle.blurple,
-        custom_id="restore_backup"
-    )
-async def backup_queue(self, interaction, button):
+        # TODO: implement backup logic
+        await interaction.response.send_message(
+            "Backup created.",
+            ephemeral=True
+        )
 
     @discord.ui.button(
         label="Restore Backup",
@@ -599,35 +597,30 @@ async def backup_queue(self, interaction, button):
             reverse=True
         )
 
-    if not files:
+        if not files:
+            return await interaction.response.send_message(
+                "No backups found.",
+                ephemeral=True
+            )
 
-        return await interaction.response.send_message(
-            "No backups found.",
-            ephemeral=True
+        latest = files[0]
+
+        await create_backup()
+
+        shutil.copy2(
+            os.path.join(BACKUP_FOLDER, latest),
+            DB
         )
 
-    latest = files[0]
+        await log_action(
+            interaction.user,
+            f"restored backup `{latest}`"
+        )
 
-    await create_backup()
-
-    shutil.copy2(
-        os.path.join(
-            BACKUP_FOLDER,
-            latest
-        ),
-        DB
-    )
-
-    await log_action(
-        interaction.user,
-        f"restored backup `{latest}`"
-    )
-
-    await interaction.response.send_message(
-        f"Restored {latest}",
-        ephemeral=True
-    )
-        
+        await interaction.response.send_message(
+            f"Restored {latest}",
+            ephemeral=True
+        )
 
 # ================= COMMAND GROUP =================
 
