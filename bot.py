@@ -829,12 +829,25 @@ class ManualAddModal(discord.ui.Modal, title="Add Name Manually"):
         max_length=50
     )
 
+    hour = discord.ui.TextInput(
+        label="Hour UTC",
+        placeholder="Example: 18:00",
+        required=True,
+        max_length=5
+    )
+
     async def on_submit(self, interaction: discord.Interaction):
+
+        hour_value = str(self.hour).strip()
+
+        if hour_value not in CART_HOURS:
+            return await interaction.response.send_message(
+                "Invalid hour. Use format like 18:00, 19:00, 20:00.",
+                ephemeral=True
+            )
 
         rows = await get_queue()
         position = len(rows) + 1
-
-        # negatieve ID zodat het nooit botst met echte Discord user IDs
         manual_id = -int(datetime.now().timestamp())
 
         async with aiosqlite.connect(DB) as db:
@@ -851,7 +864,7 @@ class ManualAddModal(discord.ui.Modal, title="Add Name Manually"):
                 (
                     manual_id,
                     position,
-                    "00:00",
+                    hour_value,
                     str(self.name)
                 )
             )
@@ -863,11 +876,11 @@ class ManualAddModal(discord.ui.Modal, title="Add Name Manually"):
 
         await log_action(
             interaction.user,
-            f"added manual name `{self.name}` to the queue"
+            f"added manual name `{self.name}` at `{hour_value} UTC`"
         )
 
         await interaction.response.send_message(
-            f"Added manual name: {self.name}",
+            f"Added manual name: {self.name} at {hour_value} UTC",
             ephemeral=True
         )
 
