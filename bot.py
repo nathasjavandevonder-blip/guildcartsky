@@ -570,7 +570,7 @@ class OfficerView(discord.ui.View):
         style=discord.ButtonStyle.green,
         custom_id="backup_queue"
     )
-async def backup_queue(self, interaction, button):
+    async def backup_queue(self, interaction, button):
 
     @discord.ui.button(
         label="Restore Backup",
