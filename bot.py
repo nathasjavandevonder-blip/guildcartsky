@@ -473,8 +473,24 @@ async def build_queue_embed():
         if not cart_date:
             cart_date = default_cart_date(pos)
 
+        today = datetime.now(timezone.utc).date()
+        tomorrow = today + timedelta(days=1)
+
+        try:
+            cart_date_obj = datetime.strptime(str(cart_date), "%Y-%m-%d").date()
+        except ValueError:
+            cart_date_obj = None
+
+        badge = ""
+
+        if cart_date_obj == today:
+            badge = "🔥 TODAY "
+
+        elif cart_date_obj == tomorrow:
+            badge = "🟡 TOMORROW "
+
         text += (
-            f"📅 {cart_date} "
+            f"{badge}📅 {cart_date} "
             f"🕒 {hour} UTC - "
             f"{mention}\n"
         )
