@@ -1116,6 +1116,95 @@ class EditDateTimeModal(discord.ui.Modal, title="Edit Cart Date + Hour"):
             ephemeral=True
         )
 
+class AddMemberDateHourModal(discord.ui.Modal, title="Add Member Date/Hour"):
+
+    cart_date = discord.ui.TextInput(
+        label="Date",
+        placeholder="YYYY-MM-DD",
+        required=True,
+        max_length=10
+    )
+
+    hour = discord.ui.TextInput(
+        label="Hour UTC",
+        placeholder="Example: 18:00",
+        required=True,
+        max_length=5
+    )
+
+    def __init__(self, member_ids):
+        super().__init__()
+        self.member_ids = member_ids
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        date_value = str(self.cart_date).strip()
+        hour_value = str(self.hour).strip()
+
+        try:
+            datetime.strptime(date_value, "%Y-%m-%d")
+        except ValueError:
+            return await interaction.response.send_message(
+                "Invalid date. Use YYYY-MM-DD.",
+                ephemeral=True
+            )
+
+        if hour_value not in CART_HOURS:
+            return await interaction.response.send_message(
+                "Invalid hour. Use format like 18:00, 19:00, 20:00.",
+                ephemeral=True
+            )
+
+        added = 0
+
+        async with aiosqlite.connect(DB) as db:
+
+            rows = await get_queue()
+            existing_ids = {row[0] for row in rows}
+            position = len(rows)
+
+            for member_id in self.member_ids:
+
+                if member_id in existing_ids:
+                    continue
+
+                position += 1
+
+                await db.execute(
+                    """
+                    INSERT OR IGNORE INTO carts(
+                        user_id,
+                        position,
+                        hour,
+                        cart_date
+                    )
+                    VALUES(?,?,?,?)
+                    """,
+                    (
+                        member_id,
+                        position,
+                        hour_value,
+                        date_value
+                    )
+                )
+
+                added += 1
+
+            await db.commit()
+
+        await compress_queue()
+        await refresh_queue()
+        await refresh_officer_panel(interaction.guild)
+
+        await log_action(
+            interaction.user,
+            f"added {added} member(s) to the queue at `{date_value} {hour_value} UTC`"
+        )
+
+        await interaction.response.send_message(
+            f"Added {added} member(s) at {date_value} {hour_value} UTC.",
+            ephemeral=True
+        )
 
 class ActionSelect(discord.ui.Select):
 
@@ -1203,55 +1292,8 @@ class OfficerPanelView(discord.ui.View):
 
         if action == "add":
 
-            added = 0
-
-            async with aiosqlite.connect(DB) as db:
-
-                rows = await get_queue()
-                existing_ids = {row[0] for row in rows}
-                position = len(rows)
-
-                for member_id in member_ids:
-
-                    if member_id in existing_ids:
-                        continue
-
-                    position += 1
-
-                    await db.execute(
-                        """
-                        INSERT OR IGNORE INTO carts(
-                            user_id,
-                            position,
-                            hour,
-                            cart_date
-                        )
-                        VALUES(?,?,?,?)
-                        """,
-                        (
-                            member_id,
-                            position,
-                            "00:00",
-                            default_cart_date(position)
-                        )
-                    )
-
-                    added += 1
-
-                await db.commit()
-
-            await compress_queue()
-            await refresh_queue()
-            await refresh_officer_panel(interaction.guild)
-
-            await log_action(
-                interaction.user,
-                f"added {added} member(s) to the queue"
-            )
-
-            return await interaction.response.send_message(
-                f"Added {added} member(s). Default hour: 00:00 UTC.",
-                ephemeral=True
+            return await interaction.response.send_modal(
+            AddMemberDateHourModal(member_ids)
             )
 
         if action == "remove":
