@@ -410,10 +410,20 @@ async def refresh_queue():
 
     global queue_message, backup_message, officer_message
 
-    if not queue_message:
-        return
-
     try:
+        if not queue_message:
+            channel = bot.get_channel(CHANNEL_ID)
+            state = load_panel_state()
+
+            if channel and state.get("queue_message_id"):
+                queue_message = await get_saved_message(
+                    channel,
+                    state.get("queue_message_id")
+                )
+
+        if not queue_message:
+            return
+
         await queue_message.edit(
             embed=await build_queue_embed(),
             view=CartView()
