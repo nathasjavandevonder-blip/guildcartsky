@@ -70,6 +70,20 @@ def date_for_position(position):
     )
 
 
+def default_cart_date(position):
+
+    return date_for_position(position).isoformat()
+
+
+def valid_date(value: str):
+
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
 # ================= DATABASE =================
 
 async def init_db():
@@ -94,6 +108,35 @@ async def init_db():
             # Column already exists on upgraded databases
             pass
 
+        try:
+            await db.execute(
+                "ALTER TABLE carts ADD COLUMN cart_date TEXT"
+            )
+        except Exception:
+            # Column already exists on upgraded databases
+            pass
+
+        cursor = await db.execute(
+            """
+            SELECT user_id, position
+            FROM carts
+            WHERE cart_date IS NULL OR cart_date=''
+            ORDER BY position
+            """
+        )
+
+        rows = await cursor.fetchall()
+
+        for user_id, position in rows:
+            await db.execute(
+                """
+                UPDATE carts
+                SET cart_date=?
+                WHERE user_id=?
+                """,
+                (default_cart_date(position), user_id)
+            )
+
         await db.commit()
 
 
@@ -112,9 +155,9 @@ async def get_queue():
 
         cursor = await db.execute(
             """
-            SELECT user_id, position, hour, manual_name
+            SELECT user_id, position, hour, manual_name, cart_date
             FROM carts
-            ORDER BY position
+            ORDER BY cart_date, hour, position
             """
         )
 
@@ -198,7 +241,7 @@ async def get_user(user_id):
 
         cursor = await db.execute(
             """
-            SELECT position,hour
+            SELECT position,hour,cart_date
             FROM carts
             WHERE user_id=?
             """,
@@ -345,7 +388,7 @@ async def get_queue_position(user_id: int):
 
     rows = await get_queue()
 
-    for uid, position, hour, manual_name in rows:
+    for uid, position, hour, manual_name, cart_date in rows:
         if uid == user_id:
             return position
 
@@ -388,9 +431,9 @@ async def build_queue_embed():
 
         cursor = await db.execute(
             """
-            SELECT user_id, position, hour, manual_name
+            SELECT user_id, position, hour, manual_name, cart_date
             FROM carts
-            ORDER BY position
+            ORDER BY cart_date, hour, position
             """
         )
 
@@ -409,7 +452,7 @@ async def build_queue_embed():
 
     text = ""
 
-    for uid, pos, hour, manual_name in rows:
+    for uid, pos, hour, manual_name, cart_date in rows:
 
         if manual_name:
 
@@ -427,7 +470,8 @@ async def build_queue_embed():
 
                 mention = f"<@{uid}>"
 
-        cart_date = date_for_position(pos)
+        if not cart_date:
+            cart_date = default_cart_date(pos)
 
         text += (
             f"📅 {cart_date} "
@@ -494,14 +538,16 @@ class JoinHourSelect(discord.ui.Select):
                     INSERT INTO carts(
                     user_id,
                     position,
-                    hour
+                    hour,
+                    cart_date
                     )
-                    VALUES(?,?,?)
+                    VALUES(?,?,?,?)
                     """,
                     (
                         interaction.user.id,
                         position,
-                        self.values[0]
+                        self.values[0],
+                        default_cart_date(position)
                     )
                 )
 
@@ -584,7 +630,7 @@ class EditHourSelect(discord.ui.Select):
                 await db.execute(
                     """
                     UPDATE carts
-                    SET hour=?
+                    SET hour=?, reminded=0
                     WHERE user_id=?
                     """,
                     (
@@ -840,6 +886,7 @@ class OfficerView(discord.ui.View):
             DB
         )
 
+        await init_db()
         await refresh_queue()
 
         await log_action(
@@ -973,15 +1020,17 @@ class ManualAddModal(discord.ui.Modal, title="Add Name Manually"):
                     user_id,
                     position,
                     hour,
-                    manual_name
+                    manual_name,
+                    cart_date
                 )
-                VALUES(?,?,?,?)
+                VALUES(?,?,?,?,?)
                 """,
                 (
                     manual_id,
                     position,
                     hour_value,
-                    str(self.name)
+                    str(self.name),
+                    default_cart_date(position)
                 )
             )
 
@@ -1001,6 +1050,73 @@ class ManualAddModal(discord.ui.Modal, title="Add Name Manually"):
             ephemeral=True
         )
 
+class EditDateTimeModal(discord.ui.Modal, title="Edit Cart Date + Hour"):
+
+    new_date = discord.ui.TextInput(
+        label="New date",
+        placeholder="Example: 2026-07-01",
+        required=True,
+        max_length=10
+    )
+
+    new_hour = discord.ui.TextInput(
+        label="New hour UTC",
+        placeholder="Example: 18:00",
+        required=True,
+        max_length=5
+    )
+
+    def __init__(self, member_ids):
+        super().__init__()
+        self.member_ids = member_ids
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        date_value = str(self.new_date).strip()
+        hour_value = str(self.new_hour).strip()
+
+        if not valid_date(date_value):
+            return await interaction.response.send_message(
+                "Invalid date. Use YYYY-MM-DD, example: 2026-07-01.",
+                ephemeral=True
+            )
+
+        if hour_value not in CART_HOURS:
+            return await interaction.response.send_message(
+                "Invalid hour. Use format like 18:00, 19:00, 20:00.",
+                ephemeral=True
+            )
+
+        updated = 0
+
+        async with aiosqlite.connect(DB) as db:
+            for member_id in self.member_ids:
+                cursor = await db.execute(
+                    """
+                    UPDATE carts
+                    SET cart_date=?, hour=?, reminded=0
+                    WHERE user_id=?
+                    """,
+                    (date_value, hour_value, member_id)
+                )
+                updated += cursor.rowcount
+
+            await db.commit()
+
+        await refresh_queue()
+        await refresh_officer_panel(interaction.guild)
+
+        await log_action(
+            interaction.user,
+            f"changed date/hour for {updated} member(s) to `{date_value} {hour_value} UTC`"
+        )
+
+        await interaction.response.send_message(
+            f"Updated {updated} member(s) to {date_value} at {hour_value} UTC.",
+            ephemeral=True
+        )
+
+
 class ActionSelect(discord.ui.Select):
 
     def __init__(self):
@@ -1011,6 +1127,7 @@ class ActionSelect(discord.ui.Select):
             discord.SelectOption(label="Remove Member", value="remove"),
             discord.SelectOption(label="Move Up", value="up"),
             discord.SelectOption(label="Move Down", value="down"),
+            discord.SelectOption(label="Edit Date + Hour", value="edit_datetime"),
         ]
 
         super().__init__(
@@ -1078,6 +1195,12 @@ class OfficerPanelView(discord.ui.View):
                 ManualAddModal()
             )
 
+        if action == "edit_datetime":
+
+            return await interaction.response.send_modal(
+                EditDateTimeModal(member_ids)
+            )
+
         if action == "add":
 
             added = 0
@@ -1100,14 +1223,16 @@ class OfficerPanelView(discord.ui.View):
                         INSERT OR IGNORE INTO carts(
                             user_id,
                             position,
-                            hour
+                            hour,
+                            cart_date
                         )
-                        VALUES(?,?,?)
+                        VALUES(?,?,?,?)
                         """,
                         (
                             member_id,
                             position,
-                            "00:00"
+                            "00:00",
+                            default_cart_date(position)
                         )
                     )
 
@@ -1270,7 +1395,7 @@ async def refresh_officer_panel(guild):
             title="⚜️ Officer Panel",
             description=
                 "Select one or more members.\n"
-                "Then choose Add, Remove, Move Up, or Move Down.",
+                "Then choose Add, Remove, Move Up, Move Down, or Edit Date + Hour.",
             colour=discord.Colour.red()
         )
 
@@ -1462,14 +1587,21 @@ async def reminder_task():
                        position,
                        hour,
                        reminded,
-                       manual_name
+                       manual_name,
+                       cart_date
                 FROM carts
                 """
             )
 
             users = await cursor.fetchall()
 
-            for uid, pos, hour, reminded, manual_name in users:
+            for uid, pos, hour, reminded, manual_name, cart_date in users:
+
+                if not cart_date:
+                    cart_date = default_cart_date(pos)
+
+                if cart_date != today_utc().isoformat():
+                    continue
 
                 hour_dt = datetime.strptime(
                     hour,
@@ -1515,9 +1647,7 @@ async def reminder_task():
 
                             owner = user.mention
 
-                        date = date_for_position(
-                            pos
-                        )
+                        date = cart_date
 
                         if channel:
 
@@ -1747,7 +1877,7 @@ async def on_ready():
             title="⚜️ Officer Panel",
             description=
                 "Select one or more members.\n"
-                "Then choose Add, Remove, Move Up, or Move Down.",
+                "Then choose Add, Remove, Move Up, Move Down, or Edit Date + Hour.",
             colour=discord.Colour.red()
         )
 
