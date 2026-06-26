@@ -5,7 +5,7 @@ import aiosqlite
 import asyncio
 import traceback
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time
 import os
 from dotenv import load_dotenv
 import json
@@ -55,6 +55,13 @@ bot = commands.Bot(
 
 # 00:00 -> 23:00 UTC
 CART_HOURS = [f"{hour:02d}:00" for hour in range(24)]
+
+# Runs exactly at 00, 05, 10, 15, ... UTC.
+MAINTENANCE_TIMES = [
+    time(hour=hour, minute=minute, tzinfo=timezone.utc)
+    for hour in range(24)
+    for minute in range(0, 60, 5)
+]
 
 
 # ================= UTC =================
@@ -340,6 +347,54 @@ async def compress_queue():
         await db.commit()
 
 
+async def cleanup_expired_carts():
+
+    """Remove carts that are already in the past using UTC date + hour."""
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    deleted = 0
+
+    async with aiosqlite.connect(DB) as db:
+
+        # Make sure old upgraded rows without cart_date are still usable.
+        cursor = await db.execute(
+            """
+            SELECT user_id, position
+            FROM carts
+            WHERE cart_date IS NULL OR cart_date=''
+            ORDER BY position
+            """
+        )
+
+        missing_dates = await cursor.fetchall()
+
+        for user_id, position in missing_dates:
+            await db.execute(
+                """
+                UPDATE carts
+                SET cart_date=?
+                WHERE user_id=?
+                """,
+                (default_cart_date(position), user_id)
+            )
+
+        cursor = await db.execute(
+            """
+            DELETE FROM carts
+            WHERE datetime(cart_date || ' ' || hour) < datetime(?)
+            """,
+            (now,)
+        )
+
+        deleted = cursor.rowcount
+        await db.commit()
+
+    if deleted:
+        await compress_queue()
+
+    return deleted
+
+
 # ================= MOVE LOGIC =================
 
 async def move_member(user_id: int, direction: str):
@@ -436,6 +491,8 @@ async def refresh_queue():
 # ================= EMBED =================
 
 async def build_queue_embed():
+
+    await cleanup_expired_carts()
 
     async with aiosqlite.connect(DB) as db:
 
@@ -1620,12 +1677,38 @@ async def list_command(
 
 bot.tree.add_command(cart)
 
+
+@tasks.loop(time=MAINTENANCE_TIMES)
+async def cleanup_task():
+
+    try:
+
+        deleted = await cleanup_expired_carts()
+
+        # Refresh every maintenance tick, even when nothing was deleted.
+        # This keeps TODAY / TOMORROW labels and the public queue message current.
+        await refresh_queue()
+
+        channel = bot.get_channel(CHANNEL_ID)
+        if channel:
+            await refresh_officer_panel(channel.guild)
+
+        if deleted:
+            print(f"Cleaned up {deleted} expired cart(s).")
+        else:
+            print("Queue maintenance refresh completed.")
+
+    except Exception:
+        traceback.print_exc()
+
 # ================= REMINDERS =================
 
 @tasks.loop(minutes=1)
 async def reminder_task():
 
     try:
+
+        await cleanup_expired_carts()
 
         now = datetime.now(
             timezone.utc
@@ -1899,6 +1982,9 @@ async def on_ready():
 
     if not update_utc_channel.is_running():
         update_utc_channel.start()
+
+    if not cleanup_task.is_running():
+        cleanup_task.start()
 
     # send panels
     try:
