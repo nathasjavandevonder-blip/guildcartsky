@@ -1025,252 +1025,97 @@ class OfficerView(discord.ui.View):
         )
 
 
-# ================= OFFICER PANEL (CLEAN HYBRID SYSTEM) =================
+# ================= OFFICER PANEL (SEARCH MODAL SYSTEM) =================
 
-class MemberSelect(discord.ui.Select):
+async def get_searchable_members(guild, include_manual=True):
 
-    def __init__(self, members, page: int = 0):
+    result = []
+    seen_ids = set()
 
-        self.members = members
-        self.page = page
+    if guild:
+        for member in guild.members:
+            if member.bot:
+                continue
 
-        page_members = paginate(members, page)
+            result.append({
+                "id": member.id,
+                "name": member.display_name,
+                "label": f"👤 {member.display_name}",
+                "is_manual": False
+            })
+            seen_ids.add(member.id)
 
-        options = []
-
-        for member_data in page_members:
-
-            if isinstance(member_data, dict):
-
-                label = member_data.get("name", "Unknown")
-                value = str(member_data.get("id"))
-
-            else:
-
-                label = getattr(member_data, "display_name", None) or str(member_data)
-                value = str(getattr(member_data, "id", member_data))
-
-            options.append(
-                discord.SelectOption(
-                    label=label[:100],
-                    value=value
-                )
-            )
-
-        if not options:
-            options.append(
-                discord.SelectOption(
-                    label="No members found",
-                    value="none"
-                )
-            )
-
-        super().__init__(
-            placeholder=f"Select members (page {page + 1})",
-            min_values=1,
-            max_values=len(options),
-            options=options,
-            custom_id=f"member_select_page_{page}"
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-
-        if self.values[0] == "none":
-            return await interaction.response.send_message(
-                "No members available.",
-                ephemeral=True
-            )
-
-        self.view.selected_members = [int(value) for value in self.values]
-
-        name_lookup = {}
-
-        for member_data in self.view.members:
-
-            if isinstance(member_data, dict):
-                name_lookup[int(member_data["id"])] = member_data["name"]
-
-            else:
-                name_lookup[int(member_data.id)] = member_data.display_name
-
-        selected_names = []
-
-        for value in self.values:
-
-            selected_id = int(value)
-            selected_names.append(
-                name_lookup.get(selected_id, f"<@{selected_id}>")
-            )
-
-        await interaction.response.send_message(
-            "Selected: " + ", ".join(selected_names),
-            ephemeral=True
-        )
-
-
-class ManualAddModal(discord.ui.Modal, title="Add Name Manually"):
-
-    name = discord.ui.TextInput(
-        label="Name",
-        placeholder="Type the name here",
-        required=True,
-        max_length=50
-    )
-
-    hour = discord.ui.TextInput(
-        label="Hour UTC",
-        placeholder="Example: 18:00",
-        required=True,
-        max_length=5
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-
-        hour_value = str(self.hour).strip()
-
-        if hour_value not in CART_HOURS:
-            return await interaction.response.send_message(
-                "Invalid hour. Use format like 18:00, 19:00, 20:00.",
-                ephemeral=True
-            )
-
-        rows = await get_queue()
-        position = len(rows) + 1
-        manual_id = -int(datetime.now().timestamp())
-
+    if include_manual:
         async with aiosqlite.connect(DB) as db:
-            await db.execute(
+            cursor = await db.execute(
                 """
-                INSERT INTO carts(
-                    user_id,
-                    position,
-                    hour,
-                    manual_name,
-                    cart_date
-                )
-                VALUES(?,?,?,?,?)
-                """,
-                (
-                    manual_id,
-                    position,
-                    hour_value,
-                    str(self.name),
-                    default_cart_date(position)
-                )
+                SELECT user_id, manual_name
+                FROM carts
+                WHERE manual_name IS NOT NULL AND manual_name!=''
+                ORDER BY manual_name
+                """
             )
+            rows = await cursor.fetchall()
 
-            await db.commit()
+        for uid, manual_name in rows:
+            if uid not in seen_ids:
+                result.append({
+                    "id": uid,
+                    "name": manual_name,
+                    "label": f"📝 {manual_name}",
+                    "is_manual": True
+                })
+                seen_ids.add(uid)
 
-        await compress_queue()
-        await refresh_queue()
-        await refresh_officer_panel(interaction.guild)
+    return sorted(result, key=lambda item: item["name"].lower())
 
-        await log_action(
-            interaction.user,
-            f"added manual name `{self.name}` at `{hour_value} UTC`"
-        )
 
-        await interaction.response.send_message(
-            f"Added manual name: {self.name} at {hour_value} UTC",
+async def find_member_matches(guild, query, include_manual=True):
+
+    query = query.strip().lower()
+
+    if not query:
+        return []
+
+    members = await get_searchable_members(
+        guild,
+        include_manual=include_manual
+    )
+
+    exact = [
+        member for member in members
+        if member["name"].lower() == query
+    ]
+
+    starts = [
+        member for member in members
+        if member not in exact
+        and member["name"].lower().startswith(query)
+    ]
+
+    contains = [
+        member for member in members
+        if member not in exact
+        and member not in starts
+        and query in member["name"].lower()
+    ]
+
+    return (exact + starts + contains)[:25]
+
+
+async def perform_officer_action(interaction, action, member_ids, date_value=None, hour_value=None):
+
+    if not has_admin_access(interaction.user):
+        return await interaction.response.send_message(
+            "No permission.",
             ephemeral=True
         )
 
-class EditDateTimeModal(discord.ui.Modal, title="Edit Cart Date + Hour"):
-
-    new_date = discord.ui.TextInput(
-        label="New date",
-        placeholder="Example: 2026-07-01",
-        required=True,
-        max_length=10
-    )
-
-    new_hour = discord.ui.TextInput(
-        label="New hour UTC",
-        placeholder="Example: 18:00",
-        required=True,
-        max_length=5
-    )
-
-    def __init__(self, member_ids):
-        super().__init__()
-        self.member_ids = member_ids
-
-    async def on_submit(self, interaction: discord.Interaction):
-
-        date_value = str(self.new_date).strip()
-        hour_value = str(self.new_hour).strip()
+    if action == "add":
 
         if not valid_date(date_value):
             return await interaction.response.send_message(
                 "Invalid date. Use YYYY-MM-DD, example: 2026-07-01.",
-                ephemeral=True
-            )
-
-        if hour_value not in CART_HOURS:
-            return await interaction.response.send_message(
-                "Invalid hour. Use format like 18:00, 19:00, 20:00.",
-                ephemeral=True
-            )
-
-        updated = 0
-
-        async with aiosqlite.connect(DB) as db:
-            for member_id in self.member_ids:
-                cursor = await db.execute(
-                    """
-                    UPDATE carts
-                    SET cart_date=?, hour=?, reminded=0
-                    WHERE user_id=?
-                    """,
-                    (date_value, hour_value, member_id)
-                )
-                updated += cursor.rowcount
-
-            await db.commit()
-
-        await refresh_queue()
-        await refresh_officer_panel(interaction.guild)
-
-        await log_action(
-            interaction.user,
-            f"changed date/hour for {updated} member(s) to `{date_value} {hour_value} UTC`"
-        )
-
-        await interaction.response.send_message(
-            f"Updated {updated} member(s) to {date_value} at {hour_value} UTC.",
-            ephemeral=True
-        )
-
-class AddMemberDateHourModal(discord.ui.Modal, title="Add Member Date/Hour"):
-
-    cart_date = discord.ui.TextInput(
-        label="Date",
-        placeholder="YYYY-MM-DD",
-        required=True,
-        max_length=10
-    )
-
-    hour = discord.ui.TextInput(
-        label="Hour UTC",
-        placeholder="Example: 18:00",
-        required=True,
-        max_length=5
-    )
-
-    def __init__(self, member_ids):
-        super().__init__()
-        self.member_ids = member_ids
-
-    async def on_submit(self, interaction: discord.Interaction):
-
-        date_value = str(self.cart_date).strip()
-        hour_value = str(self.hour).strip()
-
-        try:
-            datetime.strptime(date_value, "%Y-%m-%d")
-        except ValueError:
-            return await interaction.response.send_message(
-                "Invalid date. Use YYYY-MM-DD.",
                 ephemeral=True
             )
 
@@ -1288,7 +1133,7 @@ class AddMemberDateHourModal(discord.ui.Modal, title="Add Member Date/Hour"):
             existing_ids = {row[0] for row in rows}
             position = len(rows)
 
-            for member_id in self.member_ids:
+            for member_id in member_ids:
 
                 if member_id in existing_ids:
                     continue
@@ -1323,56 +1168,404 @@ class AddMemberDateHourModal(discord.ui.Modal, title="Add Member Date/Hour"):
 
         await log_action(
             interaction.user,
-            f"added {added} member(s) to the queue at `{date_value} {hour_value} UTC`"
+            f"added {added} member(s) at `{date_value} {hour_value} UTC`"
         )
 
-        await interaction.response.send_message(
+        return await interaction.response.send_message(
             f"Added {added} member(s) at {date_value} {hour_value} UTC.",
             ephemeral=True
         )
 
-class ActionSelect(discord.ui.Select):
+    if action == "remove":
 
-    def __init__(self):
+        removed = 0
 
-        options = [
-            discord.SelectOption(label="Add Member", value="add"),
-            discord.SelectOption(label="Add Name Manually", value="add_manual"),
-            discord.SelectOption(label="Remove Member", value="remove"),
-            discord.SelectOption(label="Move Up", value="up"),
-            discord.SelectOption(label="Move Down", value="down"),
-            discord.SelectOption(label="Edit Date + Hour", value="edit_datetime"),
-        ]
+        async with aiosqlite.connect(DB) as db:
+            for member_id in member_ids:
+                cursor = await db.execute(
+                    """
+                    DELETE FROM carts
+                    WHERE user_id=?
+                    """,
+                    (member_id,)
+                )
+                removed += cursor.rowcount
+
+            await db.commit()
+
+        await compress_queue()
+        await refresh_queue()
+        await refresh_officer_panel(interaction.guild)
+
+        await log_action(
+            interaction.user,
+            f"removed {removed} member(s) from the queue"
+        )
+
+        return await interaction.response.send_message(
+            f"Removed {removed} member(s).",
+            ephemeral=True
+        )
+
+    if action == "up":
+
+        moved = 0
+
+        for member_id in member_ids:
+            if await move_member(member_id, "up"):
+                moved += 1
+
+        await refresh_queue()
+        await refresh_officer_panel(interaction.guild)
+
+        await log_action(
+            interaction.user,
+            f"moved {moved} member(s) up"
+        )
+
+        return await interaction.response.send_message(
+            f"Moved {moved} member(s) up.",
+            ephemeral=True
+        )
+
+    if action == "down":
+
+        moved = 0
+
+        for member_id in reversed(member_ids):
+            if await move_member(member_id, "down"):
+                moved += 1
+
+        await refresh_queue()
+        await refresh_officer_panel(interaction.guild)
+
+        await log_action(
+            interaction.user,
+            f"moved {moved} member(s) down"
+        )
+
+        return await interaction.response.send_message(
+            f"Moved {moved} member(s) down.",
+            ephemeral=True
+        )
+
+    if action == "edit_datetime":
+
+        if not valid_date(date_value):
+            return await interaction.response.send_message(
+                "Invalid date. Use YYYY-MM-DD, example: 2026-07-01.",
+                ephemeral=True
+            )
+
+        if hour_value not in CART_HOURS:
+            return await interaction.response.send_message(
+                "Invalid hour. Use format like 18:00, 19:00, 20:00.",
+                ephemeral=True
+            )
+
+        updated = 0
+
+        async with aiosqlite.connect(DB) as db:
+            for member_id in member_ids:
+                cursor = await db.execute(
+                    """
+                    UPDATE carts
+                    SET cart_date=?, hour=?, reminded=0
+                    WHERE user_id=?
+                    """,
+                    (date_value, hour_value, member_id)
+                )
+                updated += cursor.rowcount
+
+            await db.commit()
+
+        await refresh_queue()
+        await refresh_officer_panel(interaction.guild)
+
+        await log_action(
+            interaction.user,
+            f"changed date/hour for {updated} member(s) to `{date_value} {hour_value} UTC`"
+        )
+
+        return await interaction.response.send_message(
+            f"Updated {updated} member(s) to {date_value} at {hour_value} UTC.",
+            ephemeral=True
+        )
+
+
+class MatchSelect(discord.ui.Select):
+
+    def __init__(self, matches, action, date_value=None, hour_value=None):
+
+        self.matches = matches
+        self.action = action
+        self.date_value = date_value
+        self.hour_value = hour_value
+
+        options = []
+
+        for match in matches[:25]:
+            options.append(
+                discord.SelectOption(
+                    label=match["label"][:100],
+                    value=str(match["id"])
+                )
+            )
 
         super().__init__(
-            placeholder="Select action...",
-            options=options,
-            custom_id="action_select"
+            placeholder="Multiple matches found, choose the correct member...",
+            min_values=1,
+            max_values=1,
+            options=options
         )
 
     async def callback(self, interaction: discord.Interaction):
 
-        view = self.view
-        action = self.values[0]
+        member_id = int(self.values[0])
 
-        if action == "add_manual":
-            return await view.handle_action(
-                interaction,
+        await perform_officer_action(
+            interaction,
+            self.action,
+            [member_id],
+            self.date_value,
+            self.hour_value
+        )
+
+
+class MatchSelectView(discord.ui.View):
+
+    def __init__(self, matches, action, date_value=None, hour_value=None):
+        super().__init__(timeout=60)
+        self.add_item(
+            MatchSelect(
+                matches,
                 action,
-                []
+                date_value,
+                hour_value
             )
+        )
 
-        if not view.selected_members:
+
+class OfficerSearchModal(discord.ui.Modal):
+
+    member_name = discord.ui.TextInput(
+        label="Member name",
+        placeholder="Type the first letters, example: ata",
+        required=True,
+        max_length=50
+    )
+
+    def __init__(self, action):
+        self.action = action
+        title = {
+            "remove": "Remove Member",
+            "up": "Move Member Up",
+            "down": "Move Member Down",
+        }.get(action, "Find Member")
+        super().__init__(title=title)
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        if not has_admin_access(interaction.user):
             return await interaction.response.send_message(
-                "Select at least one member first.",
+                "No permission.",
                 ephemeral=True
             )
 
-        await view.handle_action(
-            interaction,
-            action,
-            view.selected_members
+        matches = await find_member_matches(
+            interaction.guild,
+            str(self.member_name),
+            include_manual=True
         )
+
+        if not matches:
+            return await interaction.response.send_message(
+                "No member found with that name.",
+                ephemeral=True
+            )
+
+        if len(matches) == 1:
+            return await perform_officer_action(
+                interaction,
+                self.action,
+                [matches[0]["id"]]
+            )
+
+        await interaction.response.send_message(
+            "Multiple members found. Choose the correct one:",
+            view=MatchSelectView(matches, self.action),
+            ephemeral=True
+        )
+
+
+class OfficerDateHourSearchModal(discord.ui.Modal):
+
+    member_name = discord.ui.TextInput(
+        label="Member name",
+        placeholder="Type the first letters, example: ata",
+        required=True,
+        max_length=50
+    )
+
+    cart_date = discord.ui.TextInput(
+        label="Date",
+        placeholder="YYYY-MM-DD",
+        required=True,
+        max_length=10
+    )
+
+    hour = discord.ui.TextInput(
+        label="Hour UTC",
+        placeholder="Example: 18:00",
+        required=True,
+        max_length=5
+    )
+
+    def __init__(self, action):
+        self.action = action
+        title = {
+            "add": "Add Member",
+            "edit_datetime": "Edit Date + Hour",
+        }.get(action, "Find Member")
+        super().__init__(title=title)
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        if not has_admin_access(interaction.user):
+            return await interaction.response.send_message(
+                "No permission.",
+                ephemeral=True
+            )
+
+        date_value = str(self.cart_date).strip()
+        hour_value = str(self.hour).strip()
+
+        if not valid_date(date_value):
+            return await interaction.response.send_message(
+                "Invalid date. Use YYYY-MM-DD, example: 2026-07-01.",
+                ephemeral=True
+            )
+
+        if hour_value not in CART_HOURS:
+            return await interaction.response.send_message(
+                "Invalid hour. Use format like 18:00, 19:00, 20:00.",
+                ephemeral=True
+            )
+
+        matches = await find_member_matches(
+            interaction.guild,
+            str(self.member_name),
+            include_manual=True
+        )
+
+        if not matches:
+            return await interaction.response.send_message(
+                "No member found with that name.",
+                ephemeral=True
+            )
+
+        if len(matches) == 1:
+            return await perform_officer_action(
+                interaction,
+                self.action,
+                [matches[0]["id"]],
+                date_value,
+                hour_value
+            )
+
+        await interaction.response.send_message(
+            "Multiple members found. Choose the correct one:",
+            view=MatchSelectView(
+                matches,
+                self.action,
+                date_value,
+                hour_value
+            ),
+            ephemeral=True
+        )
+
+
+class ManualAddModal(discord.ui.Modal, title="Add Name Manually"):
+
+    name = discord.ui.TextInput(
+        label="Name",
+        placeholder="Type the name here",
+        required=True,
+        max_length=50
+    )
+
+    cart_date = discord.ui.TextInput(
+        label="Date",
+        placeholder="YYYY-MM-DD",
+        required=True,
+        max_length=10
+    )
+
+    hour = discord.ui.TextInput(
+        label="Hour UTC",
+        placeholder="Example: 18:00",
+        required=True,
+        max_length=5
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        date_value = str(self.cart_date).strip()
+        hour_value = str(self.hour).strip()
+
+        if not valid_date(date_value):
+            return await interaction.response.send_message(
+                "Invalid date. Use YYYY-MM-DD, example: 2026-07-01.",
+                ephemeral=True
+            )
+
+        if hour_value not in CART_HOURS:
+            return await interaction.response.send_message(
+                "Invalid hour. Use format like 18:00, 19:00, 20:00.",
+                ephemeral=True
+            )
+
+        rows = await get_queue()
+        position = len(rows) + 1
+        manual_id = -int(datetime.now().timestamp())
+
+        async with aiosqlite.connect(DB) as db:
+            await db.execute(
+                """
+                INSERT INTO carts(
+                    user_id,
+                    position,
+                    hour,
+                    manual_name,
+                    cart_date
+                )
+                VALUES(?,?,?,?,?)
+                """,
+                (
+                    manual_id,
+                    position,
+                    hour_value,
+                    str(self.name),
+                    date_value
+                )
+            )
+
+            await db.commit()
+
+        await compress_queue()
+        await refresh_queue()
+        await refresh_officer_panel(interaction.guild)
+
+        await log_action(
+            interaction.user,
+            f"added manual name `{self.name}` at `{date_value} {hour_value} UTC`"
+        )
+
+        await interaction.response.send_message(
+            f"Added manual name: {self.name} at {date_value} {hour_value} UTC",
+            ephemeral=True
+        )
+
 
 class OfficerActionButton(discord.ui.Button):
 
@@ -1386,204 +1579,39 @@ class OfficerActionButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
 
-        panel = self.view
-
-        if self.action == "add_manual":
-            return await panel.handle_action(
-                interaction,
-                self.action,
-                []
-            )
-
-        if not panel.selected_members:
-            return await interaction.response.send_message(
-                "Select at least one member first.",
-                ephemeral=True
-            )
-
-        await panel.handle_action(
-            interaction,
-            self.action,
-            panel.selected_members
-        )
-
-
-class OfficerPanelView(discord.ui.View):
-
-    def __init__(self, members, page: int = 0):
-
-        super().__init__(timeout=None)
-
-        self.members = members
-        self.page = page
-        self.selected_members = []
-
-        self.refresh_ui()
-
-    def refresh_ui(self):
-
-        self.clear_items()
-
-        self.add_item(MemberSelect(self.members, self.page))
-        self.add_item(OfficerActionButton("➕ Add", "add", discord.ButtonStyle.green))
-        self.add_item(OfficerActionButton("📝 Add Manual", "add_manual", discord.ButtonStyle.green))
-        self.add_item(OfficerActionButton("➖ Remove", "remove", discord.ButtonStyle.red))
-        self.add_item(OfficerActionButton("⬆️ Up", "up", discord.ButtonStyle.secondary))
-        self.add_item(OfficerActionButton("⬇️ Down", "down", discord.ButtonStyle.secondary))
-        self.add_item(OfficerActionButton("🗓 Edit", "edit_datetime", discord.ButtonStyle.blurple))
-        self.add_item(PrevButton(self))
-        self.add_item(NextButton(self))
-
-    async def handle_action(self, interaction, action, member_ids):
-
         if not has_admin_access(interaction.user):
             return await interaction.response.send_message(
                 "No permission.",
                 ephemeral=True
             )
-            
-        if action == "add_manual":
 
+        if self.action == "add_manual":
             return await interaction.response.send_modal(
                 ManualAddModal()
             )
 
-        if action == "edit_datetime":
-
+        if self.action in ("add", "edit_datetime"):
             return await interaction.response.send_modal(
-                EditDateTimeModal(member_ids)
+                OfficerDateHourSearchModal(self.action)
             )
 
-        if action == "add":
-
-            return await interaction.response.send_modal(
-            AddMemberDateHourModal(member_ids)
-            )
-
-        if action == "remove":
-
-            removed = 0
-
-            async with aiosqlite.connect(DB) as db:
-
-                for member_id in member_ids:
-
-                    cursor = await db.execute(
-                        """
-                        DELETE FROM carts
-                        WHERE user_id=?
-                        """,
-                        (
-                            member_id,
-                        )
-                    )
-
-                    removed += cursor.rowcount
-
-                await db.commit()
-
-            await compress_queue()
-            await refresh_queue()
-            await refresh_officer_panel(interaction.guild)
-
-            await log_action(
-                interaction.user,
-                f"removed {removed} member(s) from the queue"
-            )
-
-            return await interaction.response.send_message(
-                f"Removed {removed} member(s).",
-                ephemeral=True
-            )
-
-        if action == "up":
-
-            moved = 0
-
-            for member_id in member_ids:
-                if await move_member(member_id, "up"):
-                    moved += 1
-
-            await refresh_queue()
-            await refresh_officer_panel(interaction.guild)
-
-            await log_action(
-                interaction.user,
-                f"moved {moved} member(s) up"
-            )
-
-            return await interaction.response.send_message(
-                f"Moved {moved} member(s) up.",
-                ephemeral=True
-            )
-
-        if action == "down":
-
-            moved = 0
-
-            for member_id in reversed(member_ids):
-                if await move_member(member_id, "down"):
-                    moved += 1
-
-            await refresh_queue()
-            await refresh_officer_panel(interaction.guild)
-
-            await log_action(
-                interaction.user,
-                f"moved {moved} member(s) down"
-            )
-
-            return await interaction.response.send_message(
-                f"Moved {moved} member(s) down.",
-                ephemeral=True
-            )
-
-
-class PrevButton(discord.ui.Button):
-
-    def __init__(self, panel):
-        super().__init__(
-            label="⬅️ Prev",
-            style=discord.ButtonStyle.gray,
-            custom_id="officer_prev"
-        )
-        self.panel = panel
-
-    async def callback(self, interaction: discord.Interaction):
-
-        if self.panel.page > 0:
-            self.panel.page -= 1
-
-        self.panel.selected_members = []
-        self.panel.refresh_ui()
-
-        await interaction.response.edit_message(view=self.panel)
-
-
-class NextButton(discord.ui.Button):
-
-    def __init__(self, panel):
-        super().__init__(
-            label="➡️ Next",
-            style=discord.ButtonStyle.gray,
-            custom_id="officer_next"
-        )
-        self.panel = panel
-
-    async def callback(self, interaction: discord.Interaction):
-
-        max_page = max(
-            (len(self.panel.members) - 1) // PAGE_SIZE,
-            0
+        return await interaction.response.send_modal(
+            OfficerSearchModal(self.action)
         )
 
-        if self.panel.page < max_page:
-            self.panel.page += 1
 
-        self.panel.selected_members = []
-        self.panel.refresh_ui()
+class OfficerPanelView(discord.ui.View):
 
-        await interaction.response.edit_message(view=self.panel)
+    def __init__(self):
+
+        super().__init__(timeout=None)
+
+        self.add_item(OfficerActionButton("➕ Add Member", "add", discord.ButtonStyle.green))
+        self.add_item(OfficerActionButton("📝 Add Manual", "add_manual", discord.ButtonStyle.green))
+        self.add_item(OfficerActionButton("➖ Remove", "remove", discord.ButtonStyle.red))
+        self.add_item(OfficerActionButton("⬆️ Move Up", "up", discord.ButtonStyle.secondary))
+        self.add_item(OfficerActionButton("⬇️ Move Down", "down", discord.ButtonStyle.secondary))
+        self.add_item(OfficerActionButton("🗓 Edit Date/Hour", "edit_datetime", discord.ButtonStyle.blurple))
 
 
 async def refresh_officer_panel(guild):
@@ -1595,19 +1623,18 @@ async def refresh_officer_panel(guild):
 
     try:
 
-        members = await get_all_members(guild)
-
         officer_embed = discord.Embed(
             title="⚜️ Officer Panel",
             description=
-                "Select one or more members.\n"
-                "Then press Add, Remove, Up, Down, or Edit.",
+                "Use the buttons below to manage the Guild Cart queue.\n\n"
+                "Type the first letters of a member name when asked.\n"
+                "If multiple members match, the bot will ask you to choose the correct one.",
             colour=discord.Colour.red()
         )
 
         await officer_message.edit(
             embed=officer_embed,
-            view=OfficerPanelView(members)
+            view=OfficerPanelView()
         )
 
     except Exception:
@@ -2058,6 +2085,7 @@ async def on_ready():
     try:
         bot.add_view(CartView())
         bot.add_view(OfficerView())
+        bot.add_view(OfficerPanelView())
 
         print("Persistent views loaded.")
 
@@ -2124,13 +2152,12 @@ async def on_ready():
 
         # ================= OFFICER PANEL =================
 
-        members = await get_all_members(channel.guild)
-
         officer_embed = discord.Embed(
             title="⚜️ Officer Panel",
             description=
-                "Select one or more members.\n"
-                "Then press Add, Remove, Up, Down, or Edit.",
+                "Use the buttons below to manage the Guild Cart queue.\n\n"
+                "Type the first letters of a member name when asked.\n"
+                "If multiple members match, the bot will ask you to choose the correct one.",
             colour=discord.Colour.red()
         )
 
@@ -2139,7 +2166,7 @@ async def on_ready():
             state,
             "officer_message_id",
             officer_embed,
-            OfficerPanelView(members)
+            OfficerPanelView()
         )
 
     except Exception:
