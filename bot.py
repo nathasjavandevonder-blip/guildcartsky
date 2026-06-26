@@ -551,7 +551,10 @@ async def build_queue_embed():
 
     if not rows:
 
-        embed.description = "Queue is empty."
+        embed.description = (
+            "No carts are currently scheduled.\n\n"
+            "Use ➕ **Join Queue** to claim the next available cart."
+        )
 
         return embed
 
@@ -1585,6 +1588,60 @@ class OfficerActionButton(discord.ui.Button):
                 ephemeral=True
             )
 
+        if self.action == "backup":
+            backup_file = await create_backup()
+
+            await log_action(
+                interaction.user,
+                f"created backup `{os.path.basename(backup_file)}`"
+            )
+
+            return await interaction.response.send_message(
+                "✅ Backup created.",
+                ephemeral=True
+            )
+
+        if self.action == "restore":
+            create_backup_folder()
+
+            files = sorted(
+                [
+                    filename
+                    for filename in os.listdir(BACKUP_FOLDER)
+                    if filename.endswith(".db")
+                ],
+                reverse=True
+            )
+
+            if not files:
+                return await interaction.response.send_message(
+                    "No backups found.",
+                    ephemeral=True
+                )
+
+            latest = files[0]
+
+            await create_backup()
+
+            shutil.copy2(
+                os.path.join(BACKUP_FOLDER, latest),
+                DB
+            )
+
+            await init_db()
+            await refresh_queue()
+            await refresh_officer_panel(interaction.guild)
+
+            await log_action(
+                interaction.user,
+                f"restored backup `{latest}`"
+            )
+
+            return await interaction.response.send_message(
+                f"✅ Restored `{latest}`.",
+                ephemeral=True
+            )
+
         if self.action == "add_manual":
             return await interaction.response.send_modal(
                 ManualAddModal()
@@ -1606,12 +1663,14 @@ class OfficerPanelView(discord.ui.View):
 
         super().__init__(timeout=None)
 
-        self.add_item(OfficerActionButton("➕ Add Member", "add", discord.ButtonStyle.green))
-        self.add_item(OfficerActionButton("📝 Add Manual", "add_manual", discord.ButtonStyle.green))
+        self.add_item(OfficerActionButton("➕ Add", "add", discord.ButtonStyle.green))
+        self.add_item(OfficerActionButton("📝 Manual", "add_manual", discord.ButtonStyle.green))
         self.add_item(OfficerActionButton("➖ Remove", "remove", discord.ButtonStyle.red))
-        self.add_item(OfficerActionButton("⬆️ Move Up", "up", discord.ButtonStyle.secondary))
-        self.add_item(OfficerActionButton("⬇️ Move Down", "down", discord.ButtonStyle.secondary))
+        self.add_item(OfficerActionButton("⬆️ Up", "up", discord.ButtonStyle.secondary))
+        self.add_item(OfficerActionButton("⬇️ Down", "down", discord.ButtonStyle.secondary))
         self.add_item(OfficerActionButton("🗓 Edit Date/Hour", "edit_datetime", discord.ButtonStyle.blurple))
+        self.add_item(OfficerActionButton("💾 Backup", "backup", discord.ButtonStyle.green))
+        self.add_item(OfficerActionButton("♻️ Restore", "restore", discord.ButtonStyle.blurple))
 
 
 async def refresh_officer_panel(guild):
@@ -1625,11 +1684,18 @@ async def refresh_officer_panel(guild):
 
         officer_embed = discord.Embed(
             title="⚜️ Officer Panel",
-            description=
-                "Use the buttons below to manage the Guild Cart queue.\n\n"
-                "Type the first letters of a member name when asked.\n"
-                "If multiple members match, the bot will ask you to choose the correct one.",
-            colour=discord.Colour.red()
+            description=(
+                "Manage the queue using the buttons below.\n\n"
+                "➕ Add member to queue\n"
+                "📝 Add manual entry\n"
+                "➖ Remove member\n"
+                "⬆️ Move member up\n"
+                "⬇️ Move member down\n"
+                "🗓 Edit date and hour\n"
+                "💾 Create backup\n"
+                "♻️ Restore backup"
+            ),
+            colour=discord.Colour.gold()
         )
 
         await officer_message.edit(
@@ -2132,33 +2198,41 @@ async def on_ready():
             CartView()
         )
 
-        # ================= BACKUP PANEL =================
+        # ================= OLD BACKUP PANEL CLEANUP =================
+        # Backup and restore are now integrated into the Officer Panel.
+        # This keeps the SKY bot cleaner by avoiding a separate Backup Panel message.
 
-        backup_embed = discord.Embed(
-            title="💾 Backup Panel",
-            description=
-                "💾 Backup Queue\n"
-                "♻️ Restore Backup",
-            colour=discord.Colour.blurple()
-        )
-
-        backup_message = await upsert_panel_message(
+        old_backup_message = await get_saved_message(
             channel,
-            state,
-            "backup_message_id",
-            backup_embed,
-            OfficerView()
+            state.get("backup_message_id")
         )
+
+        if old_backup_message:
+            try:
+                await old_backup_message.delete()
+            except Exception:
+                traceback.print_exc()
+
+        if state.get("backup_message_id"):
+            state["backup_message_id"] = None
+            save_panel_state(state)
 
         # ================= OFFICER PANEL =================
 
         officer_embed = discord.Embed(
             title="⚜️ Officer Panel",
-            description=
-                "Use the buttons below to manage the Guild Cart queue.\n\n"
-                "Type the first letters of a member name when asked.\n"
-                "If multiple members match, the bot will ask you to choose the correct one.",
-            colour=discord.Colour.red()
+            description=(
+                "Manage the queue using the buttons below.\n\n"
+                "➕ Add member to queue\n"
+                "📝 Add manual entry\n"
+                "➖ Remove member\n"
+                "⬆️ Move member up\n"
+                "⬇️ Move member down\n"
+                "🗓 Edit date and hour\n"
+                "💾 Create backup\n"
+                "♻️ Restore backup"
+            ),
+            colour=discord.Colour.gold()
         )
 
         officer_message = await upsert_panel_message(
