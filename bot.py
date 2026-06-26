@@ -17,13 +17,12 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-print("TOKEN:", repr(TOKEN))
-print("TOKEN LENGTH:", len(TOKEN))
+print("Starting SKY Guild Cart...")
 
 CHANNEL_ID = 1517597432714887380
 GUILD_CART_ROLE_ID = 1515472832748982444
 UTC_CHANNEL_ID = 1518244845918097540
-DB = "cart.db"
+DB = "sky_guild_cart.db"
 OFFICER_ROLE_NAME = "Officer"
 GUILDMASTER_ROLE_NAME = "Guild Master"
 
@@ -39,6 +38,7 @@ LOG_CHANNEL_ID = 1515304317723213956
 
 BACKUP_FOLDER = "backups"
 PANEL_STATE_FILE = "panel_state.json"
+BACKUP_KEEP_LAST = 30
 
 # ==========================================
 
@@ -62,6 +62,8 @@ MAINTENANCE_TIMES = [
     for hour in range(24)
     for minute in range(0, 60, 5)
 ]
+
+NIGHTLY_BACKUP_TIME = time(hour=0, minute=1, tzinfo=timezone.utc)
 
 
 # ================= UTC =================
@@ -89,6 +91,19 @@ def valid_date(value: str):
         return True
     except ValueError:
         return False
+
+
+def migrate_database_name():
+
+    old_db = "cart.db"
+
+    if DB != old_db and os.path.exists(old_db) and not os.path.exists(DB):
+
+        shutil.copy2(old_db, DB)
+
+        print(f"Migrated database from {old_db} to {DB}.")
+
+
 
 
 # ================= DATABASE =================
@@ -286,20 +301,43 @@ def create_backup_folder():
     os.makedirs(BACKUP_FOLDER, exist_ok=True)
 
 
+def prune_old_backups():
+
+    create_backup_folder()
+
+    backup_files = sorted(
+        [
+            os.path.join(BACKUP_FOLDER, filename)
+            for filename in os.listdir(BACKUP_FOLDER)
+            if filename.endswith(".db")
+        ],
+        key=os.path.getmtime,
+        reverse=True
+    )
+
+    for old_file in backup_files[BACKUP_KEEP_LAST:]:
+        try:
+            os.remove(old_file)
+        except Exception:
+            traceback.print_exc()
+
+
 async def create_backup():
 
     create_backup_folder()
 
-    timestamp = datetime.now().strftime(
+    timestamp = datetime.now(timezone.utc).strftime(
         "%Y%m%d_%H%M%S"
     )
 
     backup_file = os.path.join(
         BACKUP_FOLDER,
-        f"cart_{timestamp}.db"
+        f"sky_guild_cart_{timestamp}.db"
     )
 
     shutil.copy2(DB, backup_file)
+
+    prune_old_backups()
 
     return backup_file
 
@@ -950,7 +988,11 @@ class OfficerView(discord.ui.View):
         create_backup_folder()
 
         files = sorted(
-            os.listdir(BACKUP_FOLDER),
+            [
+                filename
+                for filename in os.listdir(BACKUP_FOLDER)
+                if filename.endswith(".db")
+            ],
             reverse=True
         )
 
@@ -1332,6 +1374,40 @@ class ActionSelect(discord.ui.Select):
             view.selected_members
         )
 
+class OfficerActionButton(discord.ui.Button):
+
+    def __init__(self, label, action, style):
+        super().__init__(
+            label=label,
+            style=style,
+            custom_id=f"officer_action_{action}"
+        )
+        self.action = action
+
+    async def callback(self, interaction: discord.Interaction):
+
+        panel = self.view
+
+        if self.action == "add_manual":
+            return await panel.handle_action(
+                interaction,
+                self.action,
+                []
+            )
+
+        if not panel.selected_members:
+            return await interaction.response.send_message(
+                "Select at least one member first.",
+                ephemeral=True
+            )
+
+        await panel.handle_action(
+            interaction,
+            self.action,
+            panel.selected_members
+        )
+
+
 class OfficerPanelView(discord.ui.View):
 
     def __init__(self, members, page: int = 0):
@@ -1349,7 +1425,12 @@ class OfficerPanelView(discord.ui.View):
         self.clear_items()
 
         self.add_item(MemberSelect(self.members, self.page))
-        self.add_item(ActionSelect())
+        self.add_item(OfficerActionButton("➕ Add", "add", discord.ButtonStyle.green))
+        self.add_item(OfficerActionButton("📝 Add Manual", "add_manual", discord.ButtonStyle.green))
+        self.add_item(OfficerActionButton("➖ Remove", "remove", discord.ButtonStyle.red))
+        self.add_item(OfficerActionButton("⬆️ Up", "up", discord.ButtonStyle.secondary))
+        self.add_item(OfficerActionButton("⬇️ Down", "down", discord.ButtonStyle.secondary))
+        self.add_item(OfficerActionButton("🗓 Edit", "edit_datetime", discord.ButtonStyle.blurple))
         self.add_item(PrevButton(self))
         self.add_item(NextButton(self))
 
@@ -1520,7 +1601,7 @@ async def refresh_officer_panel(guild):
             title="⚜️ Officer Panel",
             description=
                 "Select one or more members.\n"
-                "Then choose Add, Remove, Move Up, Move Down, or Edit Date + Hour.",
+                "Then press Add, Remove, Up, Down, or Edit.",
             colour=discord.Colour.red()
         )
 
@@ -1700,6 +1781,21 @@ async def cleanup_task():
 
     except Exception:
         traceback.print_exc()
+
+@tasks.loop(time=NIGHTLY_BACKUP_TIME)
+async def nightly_backup_task():
+
+    try:
+
+        backup_file = await create_backup()
+
+        print(
+            f"Nightly backup created: {os.path.basename(backup_file)}"
+        )
+
+    except Exception:
+        traceback.print_exc()
+
 
 # ================= REMINDERS =================
 
@@ -1986,6 +2082,9 @@ async def on_ready():
     if not cleanup_task.is_running():
         cleanup_task.start()
 
+    if not nightly_backup_task.is_running():
+        nightly_backup_task.start()
+
     # send panels
     try:
         channel = bot.get_channel(CHANNEL_ID)
@@ -2031,7 +2130,7 @@ async def on_ready():
             title="⚜️ Officer Panel",
             description=
                 "Select one or more members.\n"
-                "Then choose Add, Remove, Move Up, Move Down, or Edit Date + Hour.",
+                "Then press Add, Remove, Up, Down, or Edit.",
             colour=discord.Colour.red()
         )
 
@@ -2065,6 +2164,8 @@ async def on_app_command_error(interaction, error):
 
 # ================= START =================
 async def main():
+
+    migrate_database_name()
 
     await init_db()
 
