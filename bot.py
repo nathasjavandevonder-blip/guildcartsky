@@ -2513,22 +2513,22 @@ async def reminder_task():
 
                         date = cart_date
 
-                 if channel:
+                        if channel:
 
-                        msg = await channel.send(
+                            msg = await channel.send(
 
-                         f"{role.mention}\n\n"
+                             f"{role.mention}\n\n"
 
-                         f"🔔 **Guild Cart Reminder**\n\n"
+                             f"🔔 **Guild Cart Reminder**\n\n"
 
-                        f"📅 {date}\n"
-                        f"🕒 {hour} UTC\n\n"
+                            f"📅 {date}\n"
+                            f"🕒 {hour} UTC\n\n"
 
-                        f"Current owner: {owner}\n\n"
+                            f"Current owner: {owner}\n\n"
 
-                        f"Today's cart starts in 15 minutes!"
+                            f"Today's cart starts in 15 minutes!"
 
-                         )
+                             )
 
     async def delete_reminder(message):
         await asyncio.sleep(3600)  # 1 uur
