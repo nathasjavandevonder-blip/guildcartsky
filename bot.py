@@ -2531,13 +2531,22 @@ async def reminder_task():
                              )
 
 
-                    asyncio.create_task(delete_reminder(msg))
+                            asyncio.create_task(delete_reminder(msg))
 
-                await db.commit()
+                        await db.execute(
+                            """
+                            UPDATE carts
+                            SET reminded=1
+                            WHERE user_id=?
+                            """,
+                            (uid,)
+                        )
 
-             except:
+                        await db.commit()
 
-                traceback.print_exc()
+                    except:
+
+                        traceback.print_exc()
 
     except:
 
