@@ -2530,24 +2530,26 @@ async def reminder_task():
 
                              )
 
+
+                    asyncio.create_task(delete_reminder(msg))
+
+                await db.commit()
+
+             except:
+
+                traceback.print_exc()
+
+    except:
+
+        traceback.print_exc()
+        
     async def delete_reminder(message):
         await asyncio.sleep(3600)  # 1 uur
         try:
             await message.delete()
         except:
             pass
-
-    asyncio.create_task(delete_reminder(msg))
-
-                        await db.commit()
-
-                    except:
-
-                        traceback.print_exc()
-
-    except:
-
-        traceback.print_exc()
+        
 
 
 # ================= PANEL STATE =================
