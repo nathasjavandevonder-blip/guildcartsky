@@ -2416,6 +2416,27 @@ async def nightly_backup_task():
 
 # ================= REMINDERS =================
 
+async def delete_reminder(message):
+
+    try:
+
+        await asyncio.sleep(3600)  # 1 hour
+        await message.delete()
+
+    except discord.NotFound:
+
+        # Message was already deleted.
+        pass
+
+    except discord.Forbidden:
+
+        print("Cannot delete reminder message: missing permissions.")
+
+    except Exception:
+
+        traceback.print_exc()
+
+
 @tasks.loop(minutes=1)
 async def reminder_task():
 
@@ -2515,9 +2536,11 @@ async def reminder_task():
 
                         if channel:
 
+                            ping_text = role.mention if role else "@Guild Cart"
+
                             msg = await channel.send(
 
-                             f"{role.mention}\n\n"
+                             f"{ping_text}\n\n"
 
                              f"🔔 **Guild Cart Reminder**\n\n"
 
@@ -2552,14 +2575,6 @@ async def reminder_task():
 
         traceback.print_exc()
         
-    async def delete_reminder(message):
-        await asyncio.sleep(3600)  # 1 uur
-        try:
-            await message.delete()
-        except:
-            pass
-        
-
 
 # ================= PANEL STATE =================
 
